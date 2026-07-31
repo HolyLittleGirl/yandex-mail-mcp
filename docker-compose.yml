@@ -1,0 +1,23 @@
+services:
+  yandex-mail-mcp:
+    build:
+      context: .
+    container_name: yandex-mail-mcp
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      YANDEX_ENABLE_ATTACHMENT_DOWNLOAD: "false"
+      YANDEX_ENABLE_UNSAFE_TOOLS: "false"
+    ports:
+      - "${MCP_PUBLISH_IP:-127.0.0.1}:${MCP_PUBLISH_PORT:-8000}:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
