@@ -8,10 +8,12 @@ Uses IMAP for reading and SMTP for sending.
 import imaplib
 import smtplib
 import email
+import re
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import decode_header
-from email.utils import parsedate_to_datetime
+from email.utils import formatdate, make_msgid
 import os
 import sys
 import logging
@@ -22,7 +24,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from imapclient import imap_utf7
 
-VERSION = "0.0.1"
+VERSION = "0.1.0"
 
 # Load environment variables from script's directory
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -106,6 +108,141 @@ def decode_folder_name(imap_name: str) -> str:
         return imap_name
 
 
+def parse_imap_list_item(item: bytes) -> Optional[dict]:
+    """Parse one IMAP LIST response into attributes and folder names."""
+    if not isinstance(item, bytes):
+        return None
+
+    decoded = item.decode("utf-8", errors="replace")
+    match = re.match(
+        r'^\((?P<attributes>[^)]*)\)\s+(?P<delimiter>"(?:\\.|[^"])*"|NIL)\s+'
+        r'(?P<name>"(?:\\.|[^"])*"|.+)$',
+        decoded,
+    )
+    if not match:
+        return None
+
+    raw_name = match.group("name").strip()
+    if raw_name.startswith('"') and raw_name.endswith('"'):
+        raw_name = raw_name[1:-1]
+        raw_name = raw_name.replace(r"\\", "\\").replace(r"\"", '"')
+
+    return {
+        "attributes": match.group("attributes").split(),
+        "imap_name": raw_name,
+        "name": decode_folder_name(raw_name),
+    }
+
+
+def resolve_drafts_folder(conn, requested_folder: Optional[str] = None) -> str:
+    """
+    Resolve the mailbox used for drafts.
+
+    Prefer the IMAP SPECIAL-USE ``\\Drafts`` attribute. A caller can override
+    the folder using either its human-readable or raw IMAP name.
+    """
+    status, folder_data = conn.list()
+    if status != "OK":
+        raise Exception("Failed to list folders while resolving Drafts")
+
+    folders = [
+        parsed
+        for item in folder_data
+        if (parsed := parse_imap_list_item(item)) is not None
+    ]
+
+    if requested_folder:
+        requested = requested_folder.casefold()
+        for folder in folders:
+            if (
+                folder["imap_name"].casefold() == requested
+                or folder["name"].casefold() == requested
+            ):
+                return folder["imap_name"]
+        raise Exception(f"Draft folder not found: {requested_folder}")
+
+    for folder in folders:
+        attributes = {attribute.casefold() for attribute in folder["attributes"]}
+        if r"\drafts" in attributes:
+            return folder["imap_name"]
+
+    fallback_names = {"drafts", "черновики"}
+    for folder in folders:
+        if (
+            folder["imap_name"].casefold() in fallback_names
+            or folder["name"].casefold() in fallback_names
+        ):
+            return folder["imap_name"]
+
+    raise Exception(
+        "Drafts folder not found. Pass draft_folder with the folder name "
+        "returned by list_folders()."
+    )
+
+
+def build_draft_message(
+    to: str,
+    subject: str,
+    body: str,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
+    html: bool = False,
+    in_reply_to: Optional[str] = None,
+    references: Optional[str] = None,
+):
+    """Build a MIME message suitable for saving as an IMAP draft."""
+    if not EMAIL:
+        raise ValueError("YANDEX_EMAIL must be set in .env")
+    if not to or not to.strip():
+        raise ValueError("Draft recipient must not be empty")
+
+    if html:
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(body, "html", "utf-8"))
+    else:
+        msg = MIMEText(body, "plain", "utf-8")
+
+    msg["Subject"] = subject
+    msg["From"] = EMAIL
+    msg["To"] = to
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=EMAIL.rsplit("@", 1)[-1])
+    if cc:
+        msg["Cc"] = cc
+    if bcc:
+        msg["Bcc"] = bcc
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
+
+    return msg
+
+
+def append_draft(conn, msg, draft_folder: Optional[str] = None) -> dict:
+    """Append a MIME message to the resolved Drafts folder."""
+    resolved_folder = resolve_drafts_folder(conn, draft_folder)
+    status, response = conn.append(
+        resolved_folder,
+        r"\Draft",
+        imaplib.Time2Internaldate(datetime.now().astimezone()),
+        msg.as_bytes(),
+    )
+    if status != "OK":
+        raise Exception(f"Failed to save draft in folder: {resolved_folder}")
+
+    response_text = [
+        item.decode("utf-8", errors="replace") if isinstance(item, bytes) else str(item)
+        for item in (response or [])
+    ]
+    return {
+        "status": "draft_saved",
+        "folder": decode_folder_name(resolved_folder),
+        "imap_folder": resolved_folder,
+        "imap_response": response_text,
+    }
+
+
 @mcp.tool()
 def list_folders() -> list[dict]:
     """
@@ -120,22 +257,15 @@ def list_folders() -> list[dict]:
         if status != "OK":
             raise Exception("Failed to list folders")
 
-        folders = []
-        for item in folder_data:
-            if isinstance(item, bytes):
-                # Parse folder info: (\\Attr1 \\Attr2) "/" "FolderName"
-                decoded = item.decode("utf-8", errors="replace")
-                # Extract folder name (after last quote pair)
-                parts = decoded.rsplit('"', 2)
-                if len(parts) >= 2:
-                    imap_name = parts[-2]
-                    human_name = decode_folder_name(imap_name)
-                    folders.append({
-                        "name": human_name,
-                        "imap_name": imap_name
-                    })
-
-        return folders
+        return [
+            {
+                "name": parsed["name"],
+                "imap_name": parsed["imap_name"],
+                "attributes": parsed["attributes"],
+            }
+            for item in folder_data
+            if (parsed := parse_imap_list_item(item)) is not None
+        ]
 
 
 def build_imap_search_criteria(query: str) -> list[str]:
@@ -384,6 +514,135 @@ def download_attachment(
                         }
 
         raise Exception(f"Attachment not found: {filename}")
+
+
+@mcp.tool()
+def create_draft(
+    to: str,
+    subject: str,
+    body: str,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
+    html: bool = False,
+    draft_folder: Optional[str] = None,
+) -> dict:
+    """
+    Save a new email in Yandex Mail Drafts without sending it.
+
+    Args:
+        to: Recipient email address (comma-separated for multiple).
+        subject: Draft subject.
+        body: Draft body in plain text or HTML.
+        cc: CC recipients (optional, comma-separated).
+        bcc: BCC recipients (optional, comma-separated).
+        html: Treat body as HTML when True.
+        draft_folder: Optional Drafts folder override. Use a name returned by
+            list_folders(). By default the IMAP ``\\Drafts`` folder is used.
+
+    Returns confirmation that the draft was saved. This tool never uses SMTP
+    and never sends the message.
+    """
+    msg = build_draft_message(
+        to=to,
+        subject=subject,
+        body=body,
+        cc=cc,
+        bcc=bcc,
+        html=html,
+    )
+
+    with imap_connection() as conn:
+        result = append_draft(conn, msg, draft_folder)
+
+    return {
+        **result,
+        "to": to,
+        "subject": subject,
+        "cc": cc,
+        "bcc": bcc,
+    }
+
+
+@mcp.tool()
+def create_reply_draft(
+    source_folder: str,
+    email_id: str,
+    body: str,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
+    html: bool = False,
+    draft_folder: Optional[str] = None,
+) -> dict:
+    """
+    Save a reply draft for an existing email without sending it.
+
+    The recipient is taken from Reply-To, falling back to From. The draft
+    receives a reply subject plus In-Reply-To and References headers so mail
+    clients can keep it in the original conversation.
+
+    Args:
+        source_folder: Folder containing the original email.
+        email_id: Email ID returned by search_emails().
+        body: Reply body in plain text or HTML.
+        cc: CC recipients for the draft (optional, comma-separated).
+        bcc: BCC recipients for the draft (optional, comma-separated).
+        html: Treat body as HTML when True.
+        draft_folder: Optional Drafts folder override. Use a name returned by
+            list_folders(). By default the IMAP ``\\Drafts`` folder is used.
+
+    Returns confirmation that the reply draft was saved. This tool never uses
+    SMTP and never sends the message.
+    """
+    with imap_connection() as conn:
+        status, _ = conn.select(source_folder, readonly=True)
+        if status != "OK":
+            raise Exception(f"Failed to select folder: {source_folder}")
+
+        status, msg_data = conn.fetch(email_id.encode(), "(BODY.PEEK[])")
+        if status != "OK" or not msg_data or not msg_data[0]:
+            raise Exception(f"Failed to fetch email: {email_id}")
+
+        raw_email = msg_data[0][1]
+        original = email.message_from_bytes(raw_email)
+
+        recipient = decode_mime_header(
+            original.get("Reply-To") or original.get("From", "")
+        )
+        if not recipient:
+            raise Exception("Original email has no Reply-To or From address")
+
+        original_subject = decode_mime_header(original.get("Subject", ""))
+        if re.match(r"^\s*(re|aw|sv|ответ)\s*:", original_subject, re.IGNORECASE):
+            reply_subject = original_subject
+        else:
+            reply_subject = f"Re: {original_subject}"
+
+        original_message_id = (original.get("Message-ID") or "").strip()
+        references = " ".join(original.get_all("References", []))
+        if original_message_id and original_message_id not in references:
+            references = f"{references} {original_message_id}".strip()
+
+        draft = build_draft_message(
+            to=recipient,
+            subject=reply_subject,
+            body=body,
+            cc=cc,
+            bcc=bcc,
+            html=html,
+            in_reply_to=original_message_id or None,
+            references=references or None,
+        )
+        result = append_draft(conn, draft, draft_folder)
+
+    return {
+        **result,
+        "to": recipient,
+        "subject": reply_subject,
+        "cc": cc,
+        "bcc": bcc,
+        "source_folder": source_folder,
+        "source_email_id": email_id,
+    }
 
 
 @mcp.tool()
