@@ -1,37 +1,58 @@
 # Yandex Mail MCP Server
 
-MCP (Model Context Protocol) server for Yandex Mail. Enables ChatGPT,
-Claude Desktop, and other MCP clients to read, search, draft, and send emails
-via Yandex Mail.
+MCP (Model Context Protocol) server for Yandex Mail. The default safe profile
+lets ChatGPT Work list, search, and read messages and save drafts for human
+review. Sending, deleting, moving, and attachment downloads are disabled by
+default.
 
 ## Features
 
 - **List folders** — with decoded Russian folder names
 - **Search emails** — by sender, subject, date, or custom IMAP queries (supports Cyrillic)
 - **Read emails** — full content with text/HTML body
-- **Download attachments** — save to disk
 - **Create drafts** — save plain-text or HTML drafts without sending
 - **Create reply drafts** — preserve the original conversation headers
-- **Send emails** — plain text or HTML
-- **Move/Delete emails** — organize your mailbox
+- **Safe profile** — no sending, deleting, moving, or attachment downloads
 
-## Installation
+## Ubuntu VM deployment
 
 ```bash
-# Clone the repository
+sudo apt update
+sudo apt install -y git docker.io docker-compose-v2
+sudo systemctl enable --now docker
+
 git clone https://github.com/HolyLittleGirl/yandex-mail-mcp.git
 cd yandex-mail-mcp
+cp .env.example .env
+nano .env
 
-# Create virtual environment
+sudo docker compose up -d --build
+sudo docker compose logs --tail=100
+```
+
+Set these values in `.env` before starting:
+
+- `YANDEX_APP_PASSWORD`: Yandex application password;
+- `MCP_BEARER_TOKEN`: a random secret generated with `openssl rand -hex 32`;
+- `MCP_PUBLISH_IP`: the VM's private address;
+- `MCP_PUBLIC_URL`: the public HTTPS URL ending in `/mcp`.
+
+Publish the VM through a reverse proxy as `https://mail-mcp.example.com` to
+`http://VM_IP:8000`. Do not forward port 8000 from the internet; expose only
+HTTPS port 443 through the reverse proxy.
+
+The remote endpoint uses Streamable HTTP and requires the bearer token. The
+server refuses to start in HTTP mode when the public URL or token is missing.
+
+## Local stdio installation
+
+For local MCP clients, install the Python environment and keep
+`MCP_TRANSPORT=stdio`:
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Configure credentials
-cp .env.example .env
-# Edit .env with your Yandex email and app password
 ```
 
 ## Yandex Setup
@@ -59,19 +80,19 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 Restart Claude Desktop after configuration.
 
-## Available Tools
+## Available tools in the safe profile
 
 | Tool | Description |
 |------|-------------|
 | `list_folders()` | List all mailbox folders |
 | `search_emails(folder, query, limit)` | Search emails with IMAP queries |
 | `read_email(folder, email_id)` | Read full email content |
-| `download_attachment(folder, email_id, filename, save_dir)` | Download attachment to disk |
 | `create_draft(to, subject, body, cc, bcc, html, draft_folder)` | Save a new draft without sending |
 | `create_reply_draft(source_folder, email_id, body, cc, bcc, html, draft_folder)` | Save a reply draft linked to an existing email |
-| `send_email(to, subject, body, cc, bcc, html)` | Send an email |
-| `move_email(folder, email_id, destination)` | Move email to another folder |
-| `delete_email(folder, email_id)` | Delete email (move to Trash) |
+
+The legacy attachment, send, move, and delete tools remain in the code for
+compatibility but are not registered unless their explicit environment flags
+are enabled. The clinic deployment always keeps those flags disabled.
 
 ## Draft Safety
 
@@ -115,9 +136,11 @@ UNSEEN FROM boss@company.com # Combined query
 
 ```bash
 source .venv/bin/activate
-pytest test_server.py -v
 pytest test_drafts.py -v
 ```
+
+`test_server.py` contains live-mailbox integration tests and requires a test
+mailbox. Do not run those tests against patient correspondence.
 
 ## License
 
