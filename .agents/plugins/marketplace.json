@@ -1,0 +1,20 @@
+{
+  "name": "smileeyes-clinic",
+  "interface": {
+    "displayName": "Smile Eyes Clinic"
+  },
+  "plugins": [
+    {
+      "name": "yandex-mail-clinic",
+      "source": {
+        "source": "local",
+        "path": "./plugins/yandex-mail-clinic"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
