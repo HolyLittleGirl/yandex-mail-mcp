@@ -1,0 +1,8 @@
+interface:
+  display_name: "Черновики для пациентов"
+  short_description: "Ответы пациентам в Яндекс.Почте"
+  default_prompt: "Use $draft-yandex-patient-replies to find selected patient emails and save safe reply drafts."
+
+policy:
+  allow_implicit_invocation: true
+

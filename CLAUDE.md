@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MCP (Model Context Protocol) server for Yandex Mail. Provides 9 email tools
-via IMAP/SMTP that can be used by any MCP-compatible client.
+MCP (Model Context Protocol) server for Yandex Mail. The default clinic-safe
+profile exposes five IMAP tools: folder listing, search, reading, new drafts,
+and reply drafts. Unsafe tools require explicit opt-in environment flags.
 
 ## Commands
 
@@ -44,6 +45,8 @@ Key implementation details:
 - Drafts are appended with the `\Draft` flag and never use SMTP
 - The Drafts folder is resolved by IMAP SPECIAL-USE `\Drafts`
 - Reply drafts preserve `In-Reply-To` and `References` headers
+- Streamable HTTP requires `MCP_PUBLIC_URL` and `MCP_BEARER_TOKEN`
+- Docker deployment runs as a non-root user with a read-only filesystem
 
 ## Testing
 

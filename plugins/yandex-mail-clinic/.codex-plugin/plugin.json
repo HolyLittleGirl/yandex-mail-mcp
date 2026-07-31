@@ -1,0 +1,28 @@
+{
+  "name": "yandex-mail-clinic",
+  "version": "0.1.0",
+  "description": "Safely review Yandex Mail patient messages and create human-approved reply drafts.",
+  "author": {
+    "name": "Olesya A.",
+    "url": "https://github.com/HolyLittleGirl"
+  },
+  "homepage": "https://github.com/HolyLittleGirl/yandex-mail-mcp",
+  "repository": "https://github.com/HolyLittleGirl/yandex-mail-mcp",
+  "license": "MIT",
+  "keywords": ["yandex-mail", "clinic", "drafts", "patient-support"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Yandex Mail — Clinic Drafts",
+    "shortDescription": "Prepare safe patient-email drafts in Yandex Mail.",
+    "longDescription": "Find selected patient messages in Yandex Mail, read their context, and save reply drafts for manager review. Sending, deleting, moving, and attachment downloads are disabled by default.",
+    "developerName": "Olesya A.",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Find patient emails and prepare reply drafts.",
+      "Review selected Yandex Mail messages.",
+      "Create a safe reply draft for this email."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

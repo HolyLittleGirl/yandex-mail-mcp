@@ -1,5 +1,6 @@
 """Unit tests for Yandex Mail draft creation."""
 
+import asyncio
 from contextlib import contextmanager
 from email import message_from_bytes
 
@@ -51,6 +52,35 @@ def install_fake_connection(monkeypatch, fake):
     monkeypatch.setattr(server, "imap_connection", fake_connection)
     monkeypatch.setattr(server, "EMAIL", "clinic@example.com")
     return fake
+
+
+def test_default_safe_profile_exposes_only_read_and_draft_tools():
+    tools = asyncio.run(server.mcp.list_tools())
+    tool_map = {tool.name: tool for tool in tools}
+
+    assert set(tool_map) == {
+        "list_folders",
+        "search_emails",
+        "read_email",
+        "create_draft",
+        "create_reply_draft",
+    }
+    assert tool_map["search_emails"].annotations.readOnlyHint is True
+    assert tool_map["create_reply_draft"].annotations.destructiveHint is False
+
+
+def test_static_bearer_token_verifier_accepts_only_configured_token():
+    verifier = server.StaticBearerTokenVerifier(
+        "configured-secret",
+        "https://mail-mcp.example.com/mcp",
+    )
+
+    accepted = asyncio.run(verifier.verify_token("configured-secret"))
+    rejected = asyncio.run(verifier.verify_token("wrong-secret"))
+
+    assert accepted is not None
+    assert accepted.scopes == ["mail:read", "mail:draft"]
+    assert rejected is None
 
 
 def test_parse_imap_list_item_handles_unquoted_folder():

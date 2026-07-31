@@ -8,6 +8,7 @@ Uses IMAP for reading and SMTP for sending.
 import imaplib
 import smtplib
 import email
+import hmac
 import re
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -22,16 +23,23 @@ from contextlib import contextmanager
 from typing import Optional
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.server.auth.provider import AccessToken, TokenVerifier
+from mcp.server.auth.settings import AuthSettings
+from mcp.types import ToolAnnotations
 from imapclient import imap_utf7
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # Load environment variables from script's directory
 SCRIPT_DIR = Path(__file__).parent.resolve()
 load_dotenv(SCRIPT_DIR / ".env")
 
-# Configure logging (not print - stdout is for MCP protocol)
-logging.basicConfig(level=logging.INFO, filename=str(SCRIPT_DIR / "yandex_mail_mcp.log"))
+# Configure logging (never print logs to stdout because stdio uses it for MCP).
+LOG_FILE = os.getenv("YANDEX_LOG_FILE")
+if LOG_FILE:
+    logging.basicConfig(level=logging.INFO, filename=LOG_FILE)
+else:
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
 # Yandex server settings
@@ -43,9 +51,101 @@ SMTP_PORT = 587
 # Credentials from environment
 EMAIL = os.getenv("YANDEX_EMAIL")
 PASSWORD = os.getenv("YANDEX_APP_PASSWORD")
+ENABLE_ATTACHMENT_DOWNLOAD = (
+    os.getenv("YANDEX_ENABLE_ATTACHMENT_DOWNLOAD", "false").lower() == "true"
+)
+ENABLE_UNSAFE_TOOLS = (
+    os.getenv("YANDEX_ENABLE_UNSAFE_TOOLS", "false").lower() == "true"
+)
+MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio")
+MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
+MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
+MCP_PUBLIC_URL = os.getenv("MCP_PUBLIC_URL", "").rstrip("/")
+MCP_BEARER_TOKEN = os.getenv("MCP_BEARER_TOKEN", "")
+
+
+class StaticBearerTokenVerifier(TokenVerifier):
+    """Verify the private bearer token configured for this MCP instance."""
+
+    def __init__(self, expected_token: str, resource: str):
+        self.expected_token = expected_token
+        self.resource = resource
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if not hmac.compare_digest(token, self.expected_token):
+            return None
+        return AccessToken(
+            token=token,
+            client_id="yandex-mail-clinic",
+            scopes=["mail:read", "mail:draft"],
+            resource=self.resource,
+            subject="clinic-mailbox",
+        )
+
+
+def create_mcp_server() -> FastMCP:
+    """Create an MCP server configured for stdio or protected HTTP."""
+    kwargs = {
+        "host": MCP_HOST,
+        "port": MCP_PORT,
+        "streamable_http_path": "/mcp",
+        "stateless_http": True,
+    }
+
+    if MCP_TRANSPORT == "streamable-http":
+        if not MCP_PUBLIC_URL:
+            raise RuntimeError("MCP_PUBLIC_URL is required for streamable HTTP")
+        if not MCP_BEARER_TOKEN:
+            raise RuntimeError("MCP_BEARER_TOKEN is required for streamable HTTP")
+
+        kwargs["auth"] = AuthSettings(
+            issuer_url=MCP_PUBLIC_URL,
+            resource_server_url=MCP_PUBLIC_URL,
+            required_scopes=["mail:read", "mail:draft"],
+        )
+        kwargs["token_verifier"] = StaticBearerTokenVerifier(
+            MCP_BEARER_TOKEN,
+            MCP_PUBLIC_URL,
+        )
+
+    return FastMCP(
+        "Yandex Mail",
+        instructions=(
+            "Use this server to inspect Yandex Mail and create drafts. "
+            "Draft tools save messages but never send them. In the default "
+            "safe profile, sending, moving, deleting, and attachment downloads "
+            "are not exposed. Always leave final review and sending to a human."
+        ),
+        **kwargs,
+    )
 
 # Create MCP server
-mcp = FastMCP("Yandex Mail")
+mcp = create_mcp_server()
+
+READ_ONLY_TOOL = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+DRAFT_WRITE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+LOCAL_FILE_WRITE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+UNSAFE_WRITE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=True,
+)
 
 
 def decode_mime_header(header_value: str) -> str:
@@ -243,7 +343,10 @@ def append_draft(conn, msg, draft_folder: Optional[str] = None) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    title="List Yandex Mail folders",
+    annotations=READ_ONLY_TOOL,
+)
 def list_folders() -> list[dict]:
     """
     List all mail folders in the Yandex mailbox.
@@ -304,7 +407,10 @@ def build_imap_search_criteria(query: str) -> list[str]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Search Yandex Mail",
+    annotations=READ_ONLY_TOOL,
+)
 def search_emails(
     folder: str = "INBOX",
     query: str = "ALL",
@@ -376,7 +482,10 @@ def search_emails(
         return emails
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Read a Yandex Mail message",
+    annotations=READ_ONLY_TOOL,
+)
 def read_email(folder: str, email_id: str) -> dict:
     """
     Read full email content by ID.
@@ -449,7 +558,6 @@ def read_email(folder: str, email_id: str) -> dict:
         }
 
 
-@mcp.tool()
 def download_attachment(
     folder: str,
     email_id: str,
@@ -516,7 +624,10 @@ def download_attachment(
         raise Exception(f"Attachment not found: {filename}")
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Create a Yandex Mail draft",
+    annotations=DRAFT_WRITE_TOOL,
+)
 def create_draft(
     to: str,
     subject: str,
@@ -563,7 +674,10 @@ def create_draft(
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Create a Yandex Mail reply draft",
+    annotations=DRAFT_WRITE_TOOL,
+)
 def create_reply_draft(
     source_folder: str,
     email_id: str,
@@ -645,7 +759,6 @@ def create_reply_draft(
     }
 
 
-@mcp.tool()
 def send_email(
     to: str,
     subject: str,
@@ -701,7 +814,6 @@ def send_email(
     }
 
 
-@mcp.tool()
 def move_email(folder: str, email_id: str, destination: str) -> dict:
     """
     Move an email to another folder.
@@ -739,7 +851,6 @@ def move_email(folder: str, email_id: str, destination: str) -> dict:
         }
 
 
-@mcp.tool()
 def delete_email(folder: str, email_id: str) -> dict:
     """
     Delete an email (move to Trash).
@@ -783,5 +894,26 @@ def delete_email(folder: str, email_id: str) -> dict:
         }
 
 
+if ENABLE_ATTACHMENT_DOWNLOAD:
+    mcp.tool(
+        title="Download a Yandex Mail attachment",
+        annotations=LOCAL_FILE_WRITE_TOOL,
+    )(download_attachment)
+
+if ENABLE_UNSAFE_TOOLS:
+    mcp.tool(
+        title="Send a Yandex Mail message",
+        annotations=UNSAFE_WRITE_TOOL,
+    )(send_email)
+    mcp.tool(
+        title="Move a Yandex Mail message",
+        annotations=UNSAFE_WRITE_TOOL,
+    )(move_email)
+    mcp.tool(
+        title="Delete a Yandex Mail message",
+        annotations=UNSAFE_WRITE_TOOL,
+    )(delete_email)
+
+
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    mcp.run(transport=MCP_TRANSPORT)
