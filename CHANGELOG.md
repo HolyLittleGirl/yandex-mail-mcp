@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.0] - 2026-07-31
+
+### Added
+- Save new messages as Yandex Mail drafts without sending
+- Save reply drafts linked to source messages using `In-Reply-To` and `References`
+- Automatic Drafts folder detection through IMAP SPECIAL-USE
+- Optional explicit Drafts folder override
+- Isolated unit tests for draft creation
+
+### Changed
+- Folder listing now supports both quoted and unquoted IMAP folder names
+- Folder listing includes IMAP attributes
+- MCP dependency is constrained to the compatible 1.x API
+
 ## [0.0.1] - 2025-12-22
 
 ### Added
