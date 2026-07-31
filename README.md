@@ -1,6 +1,8 @@
 # Yandex Mail MCP Server
 
-MCP (Model Context Protocol) server for Yandex Mail. Enables Claude Desktop and other MCP clients to read, search, and send emails via Yandex Mail.
+MCP (Model Context Protocol) server for Yandex Mail. Enables ChatGPT,
+Claude Desktop, and other MCP clients to read, search, draft, and send emails
+via Yandex Mail.
 
 ## Features
 
@@ -8,6 +10,8 @@ MCP (Model Context Protocol) server for Yandex Mail. Enables Claude Desktop and 
 - **Search emails** — by sender, subject, date, or custom IMAP queries (supports Cyrillic)
 - **Read emails** — full content with text/HTML body
 - **Download attachments** — save to disk
+- **Create drafts** — save plain-text or HTML drafts without sending
+- **Create reply drafts** — preserve the original conversation headers
 - **Send emails** — plain text or HTML
 - **Move/Delete emails** — organize your mailbox
 
@@ -15,7 +19,7 @@ MCP (Model Context Protocol) server for Yandex Mail. Enables Claude Desktop and 
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/yandex-mail-mcp.git
+git clone https://github.com/HolyLittleGirl/yandex-mail-mcp.git
 cd yandex-mail-mcp
 
 # Create virtual environment
@@ -63,9 +67,38 @@ Restart Claude Desktop after configuration.
 | `search_emails(folder, query, limit)` | Search emails with IMAP queries |
 | `read_email(folder, email_id)` | Read full email content |
 | `download_attachment(folder, email_id, filename, save_dir)` | Download attachment to disk |
+| `create_draft(to, subject, body, cc, bcc, html, draft_folder)` | Save a new draft without sending |
+| `create_reply_draft(source_folder, email_id, body, cc, bcc, html, draft_folder)` | Save a reply draft linked to an existing email |
 | `send_email(to, subject, body, cc, bcc, html)` | Send an email |
 | `move_email(folder, email_id, destination)` | Move email to another folder |
 | `delete_email(folder, email_id)` | Delete email (move to Trash) |
+
+## Draft Safety
+
+`create_draft` and `create_reply_draft` use IMAP `APPEND` with the
+`\Draft` flag. They do not connect to SMTP and cannot send a message.
+
+The Drafts folder is detected using the IMAP SPECIAL-USE `\Drafts`
+attribute. If the mailbox does not expose that attribute, pass
+`draft_folder` using either `name` or `imap_name` returned by
+`list_folders()`.
+
+For a reply to an existing email, prefer `create_reply_draft`. It:
+
+- reads the original message without marking it as read;
+- uses `Reply-To`, falling back to `From`;
+- adds `Re:` only when the subject has no reply prefix;
+- adds `In-Reply-To` and `References` so Yandex Mail can preserve the thread.
+
+Example MCP call:
+
+```text
+create_reply_draft(
+  source_folder="INBOX",
+  email_id="42",
+  body="Здравствуйте! Приглашаем вас на очную консультацию..."
+)
+```
 
 ## Search Query Examples
 
@@ -83,6 +116,7 @@ UNSEEN FROM boss@company.com # Combined query
 ```bash
 source .venv/bin/activate
 pytest test_server.py -v
+pytest test_drafts.py -v
 ```
 
 ## License

@@ -1,0 +1,169 @@
+"""Unit tests for Yandex Mail draft creation."""
+
+from contextlib import contextmanager
+from email import message_from_bytes
+
+import pytest
+
+import server
+
+
+class FakeImapConnection:
+    """Small IMAP fake covering the operations used by draft tools."""
+
+    def __init__(self, original_message: bytes | None = None):
+        self.original_message = original_message
+        self.append_call = None
+        self.select_call = None
+        self.fetch_call = None
+
+    def list(self):
+        return "OK", [
+            br'(\HasNoChildren) "/" INBOX',
+            br'(\HasNoChildren \Drafts) "/" Drafts',
+        ]
+
+    def append(self, folder, flags, internal_date, message):
+        self.append_call = {
+            "folder": folder,
+            "flags": flags,
+            "internal_date": internal_date,
+            "message": message,
+        }
+        return "OK", [b"[APPENDUID 123 456] Append completed"]
+
+    def select(self, folder, readonly=False):
+        self.select_call = {"folder": folder, "readonly": readonly}
+        return "OK", [b"1"]
+
+    def fetch(self, email_id, query):
+        self.fetch_call = {"email_id": email_id, "query": query}
+        return "OK", [(b"1 (BODY[] {100})", self.original_message), b")"]
+
+
+def install_fake_connection(monkeypatch, fake):
+    """Replace the real IMAP connection context manager with a fake."""
+
+    @contextmanager
+    def fake_connection():
+        yield fake
+
+    monkeypatch.setattr(server, "imap_connection", fake_connection)
+    monkeypatch.setattr(server, "EMAIL", "clinic@example.com")
+    return fake
+
+
+def test_parse_imap_list_item_handles_unquoted_folder():
+    parsed = server.parse_imap_list_item(
+        br'(\HasNoChildren \Drafts) "/" Drafts'
+    )
+
+    assert parsed == {
+        "attributes": [r"\HasNoChildren", r"\Drafts"],
+        "imap_name": "Drafts",
+        "name": "Drafts",
+    }
+
+
+def test_resolve_drafts_folder_uses_special_use_attribute():
+    fake = FakeImapConnection()
+
+    assert server.resolve_drafts_folder(fake) == "Drafts"
+
+
+def test_create_draft_appends_message_without_smtp(monkeypatch):
+    fake = install_fake_connection(monkeypatch, FakeImapConnection())
+
+    result = server.create_draft(
+        to="patient@example.com",
+        subject="Запись в клинику",
+        body="Приглашаем вас на очную консультацию.",
+    )
+
+    assert result["status"] == "draft_saved"
+    assert result["folder"] == "Drafts"
+    assert fake.append_call["folder"] == "Drafts"
+    assert fake.append_call["flags"] == r"\Draft"
+
+    message = message_from_bytes(fake.append_call["message"])
+    assert message["From"] == "clinic@example.com"
+    assert message["To"] == "patient@example.com"
+    assert server.decode_mime_header(message["Subject"]) == "Запись в клинику"
+    assert message.get_payload(decode=True).decode("utf-8") == (
+        "Приглашаем вас на очную консультацию."
+    )
+
+
+def test_create_draft_keeps_cc_and_bcc(monkeypatch):
+    fake = install_fake_connection(monkeypatch, FakeImapConnection())
+
+    server.create_draft(
+        to="patient@example.com",
+        subject="Subject",
+        body="Body",
+        cc="manager@example.com",
+        bcc="audit@example.com",
+    )
+
+    message = message_from_bytes(fake.append_call["message"])
+    assert message["Cc"] == "manager@example.com"
+    assert message["Bcc"] == "audit@example.com"
+
+
+def test_create_reply_draft_preserves_thread_headers(monkeypatch):
+    original = (
+        b"From: Patient <patient@example.com>\r\n"
+        b"Reply-To: reply@example.com\r\n"
+        b"To: clinic@example.com\r\n"
+        b"Subject: Question\r\n"
+        b"Message-ID: <original@example.com>\r\n"
+        b"References: <older@example.com>\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n"
+        b"\r\n"
+        b"Original body"
+    )
+    fake = install_fake_connection(
+        monkeypatch, FakeImapConnection(original_message=original)
+    )
+
+    result = server.create_reply_draft(
+        source_folder="INBOX",
+        email_id="42",
+        body="Reply body",
+    )
+
+    assert fake.select_call == {"folder": "INBOX", "readonly": True}
+    assert fake.fetch_call == {"email_id": b"42", "query": "(BODY.PEEK[])"}
+    assert result["to"] == "reply@example.com"
+    assert result["subject"] == "Re: Question"
+
+    message = message_from_bytes(fake.append_call["message"])
+    assert message["To"] == "reply@example.com"
+    assert message["In-Reply-To"] == "<original@example.com>"
+    assert message["References"] == (
+        "<older@example.com> <original@example.com>"
+    )
+
+
+def test_create_reply_draft_does_not_duplicate_reply_prefix(monkeypatch):
+    original = (
+        b"From: patient@example.com\r\n"
+        b"Subject: Re: Question\r\n"
+        b"Message-ID: <original@example.com>\r\n"
+        b"\r\n"
+        b"Original body"
+    )
+    install_fake_connection(
+        monkeypatch, FakeImapConnection(original_message=original)
+    )
+
+    result = server.create_reply_draft("INBOX", "7", "Reply body")
+
+    assert result["subject"] == "Re: Question"
+
+
+def test_create_draft_requires_recipient(monkeypatch):
+    install_fake_connection(monkeypatch, FakeImapConnection())
+
+    with pytest.raises(ValueError, match="recipient"):
+        server.create_draft(to="", subject="Subject", body="Body")

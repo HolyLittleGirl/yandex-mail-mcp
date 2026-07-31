@@ -4,7 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MCP (Model Context Protocol) server for Yandex Mail. Provides 7 email tools via IMAP/SMTP that can be used by any MCP-compatible client.
+MCP (Model Context Protocol) server for Yandex Mail. Provides 9 email tools
+via IMAP/SMTP that can be used by any MCP-compatible client.
 
 ## Commands
 
@@ -16,6 +17,7 @@ pip install -r requirements.txt
 
 # Run tests
 pytest test_server.py -v
+pytest test_drafts.py -v
 
 # Run single test
 pytest test_server.py::TestSearchEmails::test_search_by_from_address -v
@@ -30,6 +32,7 @@ Single-file MCP server (`server.py`) using FastMCP framework:
 
 - **Connection helpers**: `imap_connection()` and `smtp_connection()` context managers handle auth and cleanup
 - **IMAP tools**: `list_folders`, `search_emails`, `read_email`, `download_attachment`, `move_email`, `delete_email`
+- **IMAP draft tools**: `create_draft`, `create_reply_draft`
 - **SMTP tools**: `send_email`
 - **Encoding helpers**: `decode_mime_header()` for email headers, `decode_folder_name()` for IMAP UTF-7 folder names (Russian)
 
@@ -38,10 +41,15 @@ Key implementation details:
 - Logging to file (`yandex_mail_mcp.log`) because stdout is reserved for MCP protocol
 - Cyrillic search uses UTF-8 charset in IMAP SEARCH command
 - IMAP search queries need proper quoting via `build_imap_search_criteria()`
+- Drafts are appended with the `\Draft` flag and never use SMTP
+- The Drafts folder is resolved by IMAP SPECIAL-USE `\Drafts`
+- Reply drafts preserve `In-Reply-To` and `References` headers
 
 ## Testing
 
-Tests are integration tests against a live Yandex mailbox. Requires valid credentials in `.env`. Some tests may fail due to Yandex rate limiting when running full suite.
+`test_server.py` contains integration tests against a live Yandex mailbox and
+requires valid credentials in `.env`. `test_drafts.py` contains isolated unit
+tests and does not access a mailbox.
 
 ## Release
 
