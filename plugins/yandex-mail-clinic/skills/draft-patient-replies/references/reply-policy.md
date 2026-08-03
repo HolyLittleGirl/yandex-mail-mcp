@@ -17,6 +17,8 @@
 - Do not enable automatic sending.
 - Allow message moves only after the manager reviews the matching list and
   confirms the exact destination folder.
+- Allow label changes only after the manager reviews the matching list and
+  confirms the exact label and whether it will be added or removed.
 - Do not include unsupported medical, pricing, scheduling, or organizational
   claims.
 
