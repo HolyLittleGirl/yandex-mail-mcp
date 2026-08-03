@@ -57,6 +57,9 @@ PASSWORD = os.getenv("YANDEX_APP_PASSWORD")
 ENABLE_ATTACHMENT_DOWNLOAD = (
     os.getenv("YANDEX_ENABLE_ATTACHMENT_DOWNLOAD", "false").lower() == "true"
 )
+ENABLE_MOVE_TOOL = (
+    os.getenv("YANDEX_ENABLE_MOVE_TOOL", "false").lower() == "true"
+)
 ENABLE_UNSAFE_TOOLS = (
     os.getenv("YANDEX_ENABLE_UNSAFE_TOOLS", "false").lower() == "true"
 )
@@ -1032,15 +1035,17 @@ if ENABLE_ATTACHMENT_DOWNLOAD:
         annotations=LOCAL_FILE_WRITE_TOOL,
     )(download_attachment)
 
+if ENABLE_MOVE_TOOL:
+    mcp.tool(
+        title="Move a Yandex Mail message",
+        annotations=UNSAFE_WRITE_TOOL,
+    )(move_email)
+
 if ENABLE_UNSAFE_TOOLS:
     mcp.tool(
         title="Send a Yandex Mail message",
         annotations=UNSAFE_WRITE_TOOL,
     )(send_email)
-    mcp.tool(
-        title="Move a Yandex Mail message",
-        annotations=UNSAFE_WRITE_TOOL,
-    )(move_email)
     mcp.tool(
         title="Delete a Yandex Mail message",
         annotations=UNSAFE_WRITE_TOOL,
