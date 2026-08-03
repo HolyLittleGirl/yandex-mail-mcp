@@ -33,7 +33,7 @@ sudo docker compose logs --tail=100
 Set these values in `.env` before starting:
 
 - `YANDEX_APP_PASSWORD`: Yandex application password;
-- `MCP_BEARER_TOKEN`: a random secret generated with `openssl rand -hex 32`;
+- `MCP_BEARER_TOKEN`: a random admin secret generated with `openssl rand -hex 32`;
 - `MCP_PUBLISH_IP`: the VM's private address;
 - `MCP_PUBLIC_URL`: the public HTTPS URL ending in `/mcp`.
 
@@ -41,8 +41,51 @@ Publish the VM through a reverse proxy as `https://mail-mcp.example.com` to
 `http://VM_IP:8000`. Do not forward port 8000 from the internet; expose only
 HTTPS port 443 through the reverse proxy.
 
-The remote endpoint uses Streamable HTTP and requires the bearer token. The
-server refuses to start in HTTP mode when the public URL or token is missing.
+The remote endpoint uses Streamable HTTP. The default `static` mode requires
+the bearer token. For ChatGPT OAuth, use the Keycloak deployment below and set
+`MCP_AUTH_MODE=hybrid`; this keeps the private token available for diagnostics
+while normal users sign in with short-lived Keycloak access tokens.
+
+## OAuth for ChatGPT with Keycloak
+
+The included deployment runs Keycloak 26.7 with PostgreSQL. Copy its example
+configuration and use a separate HTTPS hostname for the authorization server:
+
+```bash
+cd deploy/keycloak
+cp .env.example .env
+openssl rand -base64 36
+nano .env
+sudo docker compose up -d
+sudo docker compose logs --tail=100 keycloak
+```
+
+Publish `http://VM_IP:8080` through the reverse proxy under the hostname in
+`KEYCLOAK_HOSTNAME`. Do not expose PostgreSQL or port 8080 directly to the
+internet.
+
+Create the `mailagent` realm in Keycloak and an optional client scope named
+`mcp:tools`. Add an Audience mapper to that scope with the MCP endpoint as its
+custom audience, for example `https://mail-mcp.example.com/mcp`. The resulting
+access token must contain both:
+
+```text
+aud: https://mail-mcp.example.com/mcp
+scope: mcp:tools
+```
+
+Then set the MCP environment:
+
+```dotenv
+MCP_AUTH_MODE=hybrid
+MCP_OAUTH_ISSUER_URL=https://auth.example.com/realms/mailagent
+MCP_OAUTH_AUDIENCE=https://mail-mcp.example.com/mcp
+MCP_OAUTH_REQUIRED_SCOPES=mcp:tools
+```
+
+Restart the MCP container after changing `.env`. OAuth mode validates the JWT
+signature from Keycloak's JWKS endpoint as well as its issuer, audience,
+expiration, subject, and required scope.
 
 ## Local stdio installation
 
