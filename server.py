@@ -997,18 +997,17 @@ def move_email(folder: str, email_id: str, destination: str) -> dict:
 
 def _parse_fetch_flags(fetch_data) -> list[str]:
     """Extract IMAP flags and keywords from a FETCH response."""
-    if not fetch_data or not fetch_data[0]:
-        return []
-    metadata = fetch_data[0][0]
-    if not isinstance(metadata, bytes):
-        return []
-    match = re.search(rb"FLAGS \(([^)]*)\)", metadata)
-    if not match:
-        return []
-    return [
-        item.decode("ascii", errors="replace")
-        for item in match.group(1).split()
-    ]
+    flags = []
+    for item in fetch_data or []:
+        metadata = item[0] if isinstance(item, tuple) else item
+        if not isinstance(metadata, bytes):
+            continue
+        for match in re.finditer(rb"FLAGS \(([^)]*)\)", metadata):
+            flags.extend(
+                value.decode("ascii", errors="replace")
+                for value in match.group(1).split()
+            )
+    return flags
 
 
 def _validate_label_keyword(label: str) -> str:
@@ -1061,10 +1060,10 @@ def list_email_labels(folder: str = "INBOX", limit: int = 500) -> dict:
             raise Exception(f"Failed to search folder: {folder}")
         ids = message_ids[0].split()[-limit:]
         labels = set()
-        for email_id in ids:
-            status, fetch_data = conn.fetch(email_id, "(FLAGS)")
+        if ids:
+            status, fetch_data = conn.fetch(b",".join(ids), "(FLAGS)")
             if status != "OK":
-                continue
+                raise Exception(f"Failed to fetch labels from folder: {folder}")
             labels.update(
                 flag
                 for flag in _parse_fetch_flags(fetch_data)
