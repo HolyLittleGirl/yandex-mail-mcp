@@ -133,9 +133,14 @@ Restart Claude Desktop after configuration.
 | `create_draft(to, subject, body, cc, bcc, html, draft_folder)` | Save a new draft without sending |
 | `create_reply_draft(source_folder, email_id, body, cc, bcc, html, draft_folder)` | Save a reply draft linked to an existing email |
 
-The legacy attachment, send, move, and delete tools remain in the code for
-compatibility but are not registered unless their explicit environment flags
-are enabled. The clinic deployment always keeps those flags disabled.
+The attachment, move, send, and delete tools remain disabled by default.
+Enable only mailbox moves with `YANDEX_ENABLE_MOVE_TOOL=true`. The broader
+`YANDEX_ENABLE_UNSAFE_TOOLS=true` flag exposes sending and deletion, but does
+not need to be enabled for moves.
+
+Before moving messages, show the complete matching list, resolve the exact
+destination `imap_name`, and ask for confirmation. Message sending and
+deletion should remain disabled for the clinic workflow.
 
 ## Draft Safety
 

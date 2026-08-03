@@ -15,6 +15,8 @@
 - Save replies in Yandex Mail Drafts.
 - Require a human manager to review, edit when needed, and send every reply.
 - Do not enable automatic sending.
+- Allow message moves only after the manager reviews the matching list and
+  confirms the exact destination folder.
 - Do not include unsupported medical, pricing, scheduling, or organizational
   claims.
 
@@ -33,4 +35,3 @@ Prepare only a neutral acknowledgement and invitation for human review when a
 message contains urgent symptoms, medication questions, treatment changes,
 post-operative complications, test interpretation, legal complaints, payment
 disputes, or unclear consent and identity details.
-
