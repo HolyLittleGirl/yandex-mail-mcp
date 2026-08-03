@@ -60,6 +60,9 @@ ENABLE_ATTACHMENT_DOWNLOAD = (
 ENABLE_MOVE_TOOL = (
     os.getenv("YANDEX_ENABLE_MOVE_TOOL", "false").lower() == "true"
 )
+ENABLE_LABEL_TOOL = (
+    os.getenv("YANDEX_ENABLE_LABEL_TOOL", "false").lower() == "true"
+)
 ENABLE_UNSAFE_TOOLS = (
     os.getenv("YANDEX_ENABLE_UNSAFE_TOOLS", "false").lower() == "true"
 )
@@ -279,6 +282,12 @@ UNSAFE_WRITE_TOOL = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=True,
     idempotentHint=False,
+    openWorldHint=True,
+)
+REVERSIBLE_WRITE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
     openWorldHint=True,
 )
 
@@ -986,6 +995,123 @@ def move_email(folder: str, email_id: str, destination: str) -> dict:
         }
 
 
+def _parse_fetch_flags(fetch_data) -> list[str]:
+    """Extract IMAP flags and keywords from a FETCH response."""
+    if not fetch_data or not fetch_data[0]:
+        return []
+    metadata = fetch_data[0][0]
+    if not isinstance(metadata, bytes):
+        return []
+    match = re.search(rb"FLAGS \(([^)]*)\)", metadata)
+    if not match:
+        return []
+    return [
+        item.decode("ascii", errors="replace")
+        for item in match.group(1).split()
+    ]
+
+
+def _validate_label_keyword(label: str) -> str:
+    """Validate an existing Yandex IMAP keyword used as a mail label."""
+    keyword = label.strip()
+    if not keyword:
+        raise ValueError("Label must not be empty")
+    if keyword.startswith("\\"):
+        raise ValueError("System IMAP flags cannot be changed as labels")
+    if any(ord(char) > 127 for char in keyword) or re.search(
+        r"[\s(){}%*\\\"]", keyword
+    ):
+        raise ValueError(
+            "Use the exact ASCII IMAP keyword returned by list_email_labels; "
+            "labels with spaces or non-ASCII characters cannot be written safely"
+        )
+    return keyword
+
+
+def get_email_labels(folder: str, email_id: str) -> dict:
+    """Return system flags and user labels for one email."""
+    with imap_connection() as conn:
+        status, _ = conn.select(folder, readonly=True)
+        if status != "OK":
+            raise Exception(f"Failed to select folder: {folder}")
+        status, fetch_data = conn.fetch(email_id.encode(), "(FLAGS)")
+        if status != "OK":
+            raise Exception(f"Failed to fetch flags for email: {email_id}")
+
+    flags = _parse_fetch_flags(fetch_data)
+    return {
+        "folder": folder,
+        "email_id": email_id,
+        "labels": [flag for flag in flags if not flag.startswith("\\")],
+        "system_flags": [flag for flag in flags if flag.startswith("\\")],
+    }
+
+
+def list_email_labels(folder: str = "INBOX", limit: int = 500) -> dict:
+    """List user-label keywords currently present on messages in a folder."""
+    if limit < 1 or limit > 5000:
+        raise ValueError("limit must be between 1 and 5000")
+
+    with imap_connection() as conn:
+        status, _ = conn.select(folder, readonly=True)
+        if status != "OK":
+            raise Exception(f"Failed to select folder: {folder}")
+        status, message_ids = conn.search(None, "ALL")
+        if status != "OK":
+            raise Exception(f"Failed to search folder: {folder}")
+        ids = message_ids[0].split()[-limit:]
+        labels = set()
+        for email_id in ids:
+            status, fetch_data = conn.fetch(email_id, "(FLAGS)")
+            if status != "OK":
+                continue
+            labels.update(
+                flag
+                for flag in _parse_fetch_flags(fetch_data)
+                if not flag.startswith("\\")
+            )
+
+    return {
+        "folder": folder,
+        "labels": sorted(labels, key=str.casefold),
+        "messages_scanned": len(ids),
+    }
+
+
+def set_email_label(
+    folder: str,
+    email_id: str,
+    label: str,
+    enabled: bool = True,
+) -> dict:
+    """Add or remove an existing Yandex IMAP label keyword on one email."""
+    keyword = _validate_label_keyword(label)
+    operation = "+FLAGS.SILENT" if enabled else "-FLAGS.SILENT"
+
+    with imap_connection() as conn:
+        status, _ = conn.select(folder)
+        if status != "OK":
+            raise Exception(f"Failed to select folder: {folder}")
+        status, _ = conn.store(email_id.encode(), operation, f"({keyword})")
+        if status != "OK":
+            raise Exception(f"Failed to update label: {keyword}")
+        status, fetch_data = conn.fetch(email_id.encode(), "(FLAGS)")
+        if status != "OK":
+            raise Exception("Label changed, but verification failed")
+
+    flags = _parse_fetch_flags(fetch_data)
+    labels = [flag for flag in flags if not flag.startswith("\\")]
+    if (keyword in labels) != enabled:
+        raise Exception("Yandex Mail did not preserve the requested label change")
+    return {
+        "status": "label_added" if enabled else "label_removed",
+        "folder": folder,
+        "email_id": email_id,
+        "label": keyword,
+        "labels": labels,
+    }
+
+
 def delete_email(folder: str, email_id: str) -> dict:
     """
     Delete an email (move to Trash).
@@ -1040,6 +1166,20 @@ if ENABLE_MOVE_TOOL:
         title="Move a Yandex Mail message",
         annotations=UNSAFE_WRITE_TOOL,
     )(move_email)
+
+if ENABLE_LABEL_TOOL:
+    mcp.tool(
+        title="Get labels for a Yandex Mail message",
+        annotations=READ_ONLY_TOOL,
+    )(get_email_labels)
+    mcp.tool(
+        title="List Yandex Mail label keywords",
+        annotations=READ_ONLY_TOOL,
+    )(list_email_labels)
+    mcp.tool(
+        title="Add or remove a Yandex Mail label",
+        annotations=REVERSIBLE_WRITE_TOOL,
+    )(set_email_label)
 
 if ENABLE_UNSAFE_TOOLS:
     mcp.tool(
