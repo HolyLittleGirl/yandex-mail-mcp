@@ -5,6 +5,7 @@ Provides email tools for Claude Desktop via MCP protocol.
 Uses IMAP for reading and SMTP for sending.
 """
 
+import asyncio
 import imaplib
 import smtplib
 import email
@@ -22,13 +23,15 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import Optional
 from dotenv import load_dotenv
+import jwt
+from jwt import InvalidTokenError, PyJWKClient, PyJWTError
 from mcp.server.fastmcp import FastMCP
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.types import ToolAnnotations
 from imapclient import imap_utf7
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # Load environment variables from script's directory
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -62,14 +65,38 @@ MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 MCP_PUBLIC_URL = os.getenv("MCP_PUBLIC_URL", "").rstrip("/")
 MCP_BEARER_TOKEN = os.getenv("MCP_BEARER_TOKEN", "")
+MCP_AUTH_MODE = os.getenv("MCP_AUTH_MODE", "static").strip().lower()
+MCP_OAUTH_ISSUER_URL = os.getenv("MCP_OAUTH_ISSUER_URL", "").rstrip("/")
+MCP_OAUTH_AUDIENCE = os.getenv(
+    "MCP_OAUTH_AUDIENCE", MCP_PUBLIC_URL
+).rstrip("/")
+MCP_OAUTH_JWKS_URL = os.getenv(
+    "MCP_OAUTH_JWKS_URL",
+    (
+        f"{MCP_OAUTH_ISSUER_URL}/protocol/openid-connect/certs"
+        if MCP_OAUTH_ISSUER_URL
+        else ""
+    ),
+)
+MCP_OAUTH_REQUIRED_SCOPES = [
+    scope
+    for scope in os.getenv("MCP_OAUTH_REQUIRED_SCOPES", "mcp:tools").split()
+    if scope
+]
 
 
 class StaticBearerTokenVerifier(TokenVerifier):
     """Verify the private bearer token configured for this MCP instance."""
 
-    def __init__(self, expected_token: str, resource: str):
+    def __init__(
+        self,
+        expected_token: str,
+        resource: str,
+        scopes: Optional[list[str]] = None,
+    ):
         self.expected_token = expected_token
         self.resource = resource
+        self.scopes = scopes or ["mail:read", "mail:draft"]
 
     async def verify_token(self, token: str) -> AccessToken | None:
         if not hmac.compare_digest(token, self.expected_token):
@@ -77,10 +104,80 @@ class StaticBearerTokenVerifier(TokenVerifier):
         return AccessToken(
             token=token,
             client_id="yandex-mail-clinic",
-            scopes=["mail:read", "mail:draft"],
+            scopes=self.scopes,
             resource=self.resource,
             subject="clinic-mailbox",
         )
+
+
+class KeycloakJWTTokenVerifier(TokenVerifier):
+    """Validate Keycloak access tokens for the public MCP resource."""
+
+    def __init__(
+        self,
+        issuer: str,
+        audience: str,
+        jwks_url: str,
+        required_scopes: list[str],
+    ):
+        self.issuer = issuer
+        self.audience = audience
+        self.required_scopes = set(required_scopes)
+        self.jwks_client = PyJWKClient(jwks_url, cache_keys=True)
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        try:
+            signing_key = await asyncio.to_thread(
+                self.jwks_client.get_signing_key_from_jwt,
+                token,
+            )
+            claims = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=self.audience,
+                issuer=self.issuer,
+                options={"require": ["exp", "iss", "sub"]},
+            )
+        except (InvalidTokenError, PyJWTError, ValueError, OSError) as exc:
+            logger.warning("OAuth access token rejected: %s", exc)
+            return None
+
+        raw_scopes = claims.get("scope", "")
+        scopes = (
+            raw_scopes.split()
+            if isinstance(raw_scopes, str)
+            else list(raw_scopes or [])
+        )
+        if not self.required_scopes.issubset(scopes):
+            logger.warning("OAuth access token rejected: required scope missing")
+            return None
+
+        return AccessToken(
+            token=token,
+            client_id=claims.get("azp") or claims.get("client_id") or "oauth-client",
+            scopes=scopes,
+            resource=self.audience,
+            subject=claims["sub"],
+        )
+
+
+class HybridTokenVerifier(TokenVerifier):
+    """Accept either the private admin token or a valid OAuth access token."""
+
+    def __init__(
+        self,
+        static_verifier: StaticBearerTokenVerifier,
+        oauth_verifier: KeycloakJWTTokenVerifier,
+    ):
+        self.static_verifier = static_verifier
+        self.oauth_verifier = oauth_verifier
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        static_result = await self.static_verifier.verify_token(token)
+        if static_result is not None:
+            return static_result
+        return await self.oauth_verifier.verify_token(token)
 
 
 def create_mcp_server() -> FastMCP:
@@ -95,18 +192,53 @@ def create_mcp_server() -> FastMCP:
     if MCP_TRANSPORT == "streamable-http":
         if not MCP_PUBLIC_URL:
             raise RuntimeError("MCP_PUBLIC_URL is required for streamable HTTP")
-        if not MCP_BEARER_TOKEN:
-            raise RuntimeError("MCP_BEARER_TOKEN is required for streamable HTTP")
+
+        if MCP_AUTH_MODE not in {"static", "oauth", "hybrid"}:
+            raise RuntimeError("MCP_AUTH_MODE must be static, oauth, or hybrid")
+        if MCP_AUTH_MODE in {"static", "hybrid"} and not MCP_BEARER_TOKEN:
+            raise RuntimeError(
+                "MCP_BEARER_TOKEN is required for static or hybrid auth"
+            )
+        if MCP_AUTH_MODE in {"oauth", "hybrid"} and not MCP_OAUTH_ISSUER_URL:
+            raise RuntimeError(
+                "MCP_OAUTH_ISSUER_URL is required for oauth or hybrid auth"
+            )
+
+        required_scopes = (
+            MCP_OAUTH_REQUIRED_SCOPES
+            if MCP_AUTH_MODE in {"oauth", "hybrid"}
+            else ["mail:read", "mail:draft"]
+        )
+        issuer_url = (
+            MCP_OAUTH_ISSUER_URL
+            if MCP_AUTH_MODE in {"oauth", "hybrid"}
+            else MCP_PUBLIC_URL
+        )
 
         kwargs["auth"] = AuthSettings(
-            issuer_url=MCP_PUBLIC_URL,
+            issuer_url=issuer_url,
             resource_server_url=MCP_PUBLIC_URL,
-            required_scopes=["mail:read", "mail:draft"],
+            required_scopes=required_scopes,
         )
-        kwargs["token_verifier"] = StaticBearerTokenVerifier(
+        static_verifier = StaticBearerTokenVerifier(
             MCP_BEARER_TOKEN,
             MCP_PUBLIC_URL,
+            required_scopes,
         )
+        if MCP_AUTH_MODE == "static":
+            kwargs["token_verifier"] = static_verifier
+        else:
+            oauth_verifier = KeycloakJWTTokenVerifier(
+                MCP_OAUTH_ISSUER_URL,
+                MCP_OAUTH_AUDIENCE,
+                MCP_OAUTH_JWKS_URL,
+                required_scopes,
+            )
+            kwargs["token_verifier"] = (
+                HybridTokenVerifier(static_verifier, oauth_verifier)
+                if MCP_AUTH_MODE == "hybrid"
+                else oauth_verifier
+            )
 
     return FastMCP(
         "Yandex Mail",
