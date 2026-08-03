@@ -142,6 +142,10 @@ Enable message-label tools with `YANDEX_ENABLE_LABEL_TOOL=true`. These tools
 list existing IMAP label keywords and add or remove a selected keyword. Keep
 label changes behind the same preview-and-confirmation workflow as moves.
 
+Before moving messages or changing labels, show the complete matching list,
+resolve the exact destination or label keyword, and ask for confirmation.
+Message sending and deletion should remain disabled for the clinic workflow.
+
 ## Draft Safety
 
 `create_draft` and `create_reply_draft` use IMAP `APPEND` with the
