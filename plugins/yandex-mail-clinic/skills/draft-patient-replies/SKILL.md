@@ -1,52 +1,66 @@
 ---
 name: draft-yandex-patient-replies
-description: Find selected patient messages in Yandex Mail by a configured folder OR a subject phrase, review their contents, and save safe reply drafts for manager approval. Use for ophthalmology-clinic inbox triage, patient-email review, invitation-focused replies, and creating Yandex Mail drafts that must never be sent automatically.
+description: Find selected patient messages in Yandex Mail using either a chosen folder or a subject phrase, review their contents, and save safe reply drafts for manager approval. Use for ophthalmology-clinic inbox triage, patient-email review, invitation-focused replies, and Yandex Mail drafts that must never be sent automatically.
 ---
 
 # Draft Yandex Patient Replies
 
-Use only the bundled `yandex-mail-clinic` MCP tools. Read
-[`references/reply-policy.md`](references/reply-policy.md) before drafting a
-patient reply.
+Use the bundled `yandex-mail-clinic` MCP tools. Read
+[`references/reply-policy.md`](references/reply-policy.md) before drafting.
 
-## Select messages
+## Choose one selector
 
-1. Resolve the target folder and subject phrase from the user's request or the
-   established clinic configuration.
-2. If neither value is known, ask for at least one. Do not guess folder names or
-   subject phrases.
-3. Treat the conditions as **OR**, never AND:
-   - include messages located in the target folder;
-   - include messages whose subject contains the target phrase.
-4. Call `list_folders` before using a human-readable folder name. Use the
-   returned `imap_name` in subsequent tool calls.
-5. Search the target folder and the subject condition separately. Unless the
-   user names another base folder for subject searches, search `INBOX`.
-6. Deduplicate results by the pair `folder + email id`.
+Use exactly one selection method for each run:
+
+- **Folder mode:** select messages from one chosen folder.
+- **Subject mode:** select messages whose subject contains one chosen phrase.
+
+Never combine folder and subject as simultaneous conditions. If both are
+provided without a clear choice, ask which selector to use.
+
+For folder mode, call `list_folders`, resolve the human-readable name to its
+`imap_name`, then call `search_emails` for that folder. For subject mode,
+search `INBOX` unless the user explicitly names another search location.
+Deduplicate results by `folder + email id`.
 
 ## Review and draft
 
 1. Present the selected message list before creating drafts unless the user
    explicitly asks to process every matching message.
 2. Read each selected message with `read_email`.
-3. Identify the patient's actual question and any requested next step. Do not
-   infer a diagnosis from symptoms or attachments.
+3. Identify the patient's actual question and requested next step. Do not infer
+   a diagnosis from symptoms, test results, or attachments.
 4. Draft a concise, empathetic reply in Russian. Prefer inviting the patient to
    contact or visit the clinic for an in-person assessment.
-5. Use only confirmed clinic facts. If a price, doctor, schedule, preparation
-   rule, treatment statement, or contact detail is not supplied in approved
-   materials, do not invent it.
-6. Save the response with `create_reply_draft` so the original thread headers
-   are preserved.
-7. Report the source message, draft recipient, subject, and save result.
+5. Use only confirmed clinic facts. Never invent a price, doctor, schedule,
+   preparation rule, medical statement, address, phone number, or signature.
+6. Save with `create_reply_draft` so the original thread is preserved.
+7. Report the source message, recipient, subject, and draft-save result.
+
+## Optional mailbox organization
+
+Use `move_email` only when the tool is available and the user explicitly asks
+to organize messages. Before moving anything:
+
+1. Search and show the complete matching message list.
+2. Resolve the destination with `list_folders` and use its exact `imap_name`.
+3. State the source folder, destination folder, and number of messages.
+4. Ask for confirmation immediately before the first move.
+
+After confirmation, move only the listed messages and report each result. A
+move is not deletion, but it changes mailbox state and must never be inferred
+from a request that only asks to search, review, or draft replies.
 
 ## Safety boundary
 
-- Never claim to diagnose, prescribe, interpret tests, or replace a physician.
-- Never call or request sending, deleting, moving, or attachment-download
-  operations.
-- Never state that a message was sent. Say only that a draft was saved.
-- Keep a human manager as the final reviewer and sender.
-- Stop and ask for clarification when the patient's identity, intended
-  recipient, or clinic facts are ambiguous.
-
+- Never diagnose, prescribe, interpret tests, or replace a physician.
+- Never send, delete, or download attachments.
+- Never move messages without an explicit organization request, a preview,
+  and confirmation of the exact source messages and destination folder.
+- Never state that a message was sent; say only that a draft was saved.
+- Keep a human manager as final reviewer and sender.
+- Stop and ask when identity, recipient, selector, or clinic facts are unclear.
+- For urgent symptoms, medication questions, treatment changes,
+  post-operative complications, legal complaints, or payment disputes, flag
+  the message for human review and prepare only a neutral acknowledgement when
+  explicitly requested.
