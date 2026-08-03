@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-08-03
+
+### Added
+- OAuth access-token validation for a Keycloak authorization server
+- Hybrid authentication that preserves the private diagnostic bearer token
+- Audience and scope enforcement for the public MCP resource
+- Keycloak 26.7 and PostgreSQL Docker Compose deployment
+
+### Changed
+- Protected resource metadata now points OAuth clients to the Keycloak realm
+
 ## [0.2.0] - 2026-07-31
 
 ### Added

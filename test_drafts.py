@@ -83,6 +83,90 @@ def test_static_bearer_token_verifier_accepts_only_configured_token():
     assert rejected is None
 
 
+def test_keycloak_verifier_accepts_expected_audience_and_scope(monkeypatch):
+    verifier = server.KeycloakJWTTokenVerifier(
+        issuer="https://auth.example.com/realms/mailagent",
+        audience="https://mail-mcp.example.com/mcp",
+        jwks_url="https://auth.example.com/realms/mailagent/certs",
+        required_scopes=["mcp:tools"],
+    )
+
+    class SigningKey:
+        key = "public-key"
+
+    monkeypatch.setattr(
+        verifier.jwks_client,
+        "get_signing_key_from_jwt",
+        lambda token: SigningKey(),
+    )
+    monkeypatch.setattr(
+        server.jwt,
+        "decode",
+        lambda *args, **kwargs: {
+            "sub": "user-123",
+            "azp": "chatgpt-client",
+            "scope": "openid mcp:tools",
+        },
+    )
+
+    accepted = asyncio.run(verifier.verify_token("signed-jwt"))
+
+    assert accepted is not None
+    assert accepted.client_id == "chatgpt-client"
+    assert accepted.resource == "https://mail-mcp.example.com/mcp"
+    assert accepted.scopes == ["openid", "mcp:tools"]
+
+
+def test_keycloak_verifier_rejects_missing_scope(monkeypatch):
+    verifier = server.KeycloakJWTTokenVerifier(
+        issuer="https://auth.example.com/realms/mailagent",
+        audience="https://mail-mcp.example.com/mcp",
+        jwks_url="https://auth.example.com/realms/mailagent/certs",
+        required_scopes=["mcp:tools"],
+    )
+
+    class SigningKey:
+        key = "public-key"
+
+    monkeypatch.setattr(
+        verifier.jwks_client,
+        "get_signing_key_from_jwt",
+        lambda token: SigningKey(),
+    )
+    monkeypatch.setattr(
+        server.jwt,
+        "decode",
+        lambda *args, **kwargs: {"sub": "user-123", "scope": "openid"},
+    )
+
+    assert asyncio.run(verifier.verify_token("signed-jwt")) is None
+
+
+def test_hybrid_verifier_keeps_static_admin_token(monkeypatch):
+    static_verifier = server.StaticBearerTokenVerifier(
+        "admin-secret",
+        "https://mail-mcp.example.com/mcp",
+        ["mcp:tools"],
+    )
+    oauth_verifier = server.KeycloakJWTTokenVerifier(
+        issuer="https://auth.example.com/realms/mailagent",
+        audience="https://mail-mcp.example.com/mcp",
+        jwks_url="https://auth.example.com/realms/mailagent/certs",
+        required_scopes=["mcp:tools"],
+    )
+    monkeypatch.setattr(
+        oauth_verifier,
+        "verify_token",
+        lambda token: pytest.fail("OAuth verifier should not be called"),
+    )
+    verifier = server.HybridTokenVerifier(static_verifier, oauth_verifier)
+
+    accepted = asyncio.run(verifier.verify_token("admin-secret"))
+
+    assert accepted is not None
+    assert accepted.scopes == ["mcp:tools"]
+
+
 def test_parse_imap_list_item_handles_unquoted_folder():
     parsed = server.parse_imap_list_item(
         br'(\HasNoChildren \Drafts) "/" Drafts'
