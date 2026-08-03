@@ -138,9 +138,13 @@ Enable only mailbox moves with `YANDEX_ENABLE_MOVE_TOOL=true`. The broader
 `YANDEX_ENABLE_UNSAFE_TOOLS=true` flag exposes sending and deletion, but does
 not need to be enabled for moves.
 
-Before moving messages, show the complete matching list, resolve the exact
-destination `imap_name`, and ask for confirmation. Message sending and
-deletion should remain disabled for the clinic workflow.
+Enable message-label tools with `YANDEX_ENABLE_LABEL_TOOL=true`. These tools
+list existing IMAP label keywords and add or remove a selected keyword. Keep
+label changes behind the same preview-and-confirmation workflow as moves.
+
+Before moving messages or changing labels, show the complete matching list,
+resolve the exact destination or label keyword, and ask for confirmation.
+Message sending and deletion should remain disabled for the clinic workflow.
 
 ## Draft Safety
 

@@ -17,6 +17,8 @@ class FakeImapConnection:
         self.append_call = None
         self.select_call = None
         self.fetch_call = None
+        self.store_call = None
+        self.flags = [r"\\Seen", "patient"]
 
     def list(self):
         return "OK", [
@@ -39,7 +41,23 @@ class FakeImapConnection:
 
     def fetch(self, email_id, query):
         self.fetch_call = {"email_id": email_id, "query": query}
+        if query == "(FLAGS)":
+            flags = " ".join(self.flags).encode("ascii")
+            return "OK", [(b"1 (FLAGS (" + flags + b"))", b"")]
         return "OK", [(b"1 (BODY[] {100})", self.original_message), b")"]
+
+    def store(self, email_id, operation, flags):
+        self.store_call = {
+            "email_id": email_id,
+            "operation": operation,
+            "flags": flags,
+        }
+        label = flags.strip("()")
+        if operation.startswith("+") and label not in self.flags:
+            self.flags.append(label)
+        if operation.startswith("-") and label in self.flags:
+            self.flags.remove(label)
+        return "OK", [b"Stored"]
 
 
 def install_fake_connection(monkeypatch, fake):
@@ -183,6 +201,36 @@ def test_resolve_drafts_folder_uses_special_use_attribute():
     fake = FakeImapConnection()
 
     assert server.resolve_drafts_folder(fake) == "Drafts"
+
+
+def test_get_email_labels_separates_system_flags(monkeypatch):
+    fake = install_fake_connection(monkeypatch, FakeImapConnection())
+
+    result = server.get_email_labels("INBOX", "42")
+
+    assert result["labels"] == ["patient"]
+    assert result["system_flags"] == [r"\\Seen"]
+    assert fake.select_call == {"folder": "INBOX", "readonly": True}
+
+
+def test_set_email_label_adds_and_verifies_keyword(monkeypatch):
+    fake = install_fake_connection(monkeypatch, FakeImapConnection())
+
+    result = server.set_email_label("INBOX", "42", "answered", True)
+
+    assert result["status"] == "label_added"
+    assert "answered" in result["labels"]
+    assert fake.store_call == {
+        "email_id": b"42",
+        "operation": "+FLAGS.SILENT",
+        "flags": "(answered)",
+    }
+
+
+@pytest.mark.parametrize("label", ["", r"\\Deleted", "доктор", "needs review"])
+def test_set_email_label_rejects_unsafe_keywords(label):
+    with pytest.raises(ValueError):
+        server._validate_label_keyword(label)
 
 
 def test_create_draft_appends_message_without_smtp(monkeypatch):
