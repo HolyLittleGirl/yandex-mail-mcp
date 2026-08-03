@@ -19,9 +19,9 @@ Never combine folder and subject as simultaneous conditions. If both are
 provided without a clear choice, ask which selector to use.
 
 For folder mode, call `list_folders`, resolve the human-readable name to its
-`imap_name`, then call `search_emails` for that folder. For subject mode,
-search `INBOX` unless the user explicitly names another search location.
-Deduplicate results by `folder + email id`.
+`imap_name`, then call `search_emails` for that folder. For subject mode, search
+`INBOX` unless the user explicitly names another search location. Deduplicate
+results by `folder + email id`.
 
 ## Review and draft
 
@@ -51,12 +51,20 @@ After confirmation, move only the listed messages and report each result. A
 move is not deletion, but it changes mailbox state and must never be inferred
 from a request that only asks to search, review, or draft replies.
 
+For labels, use `list_email_labels` or `get_email_labels` first and select the
+exact existing IMAP keyword. Show the matching messages, requested label, and
+whether it will be added or removed. Ask for confirmation immediately before
+the first `set_email_label` call, then change only the listed messages and
+report every result.
+
 ## Safety boundary
 
 - Never diagnose, prescribe, interpret tests, or replace a physician.
 - Never send, delete, or download attachments.
 - Never move messages without an explicit organization request, a preview,
   and confirmation of the exact source messages and destination folder.
+- Never add or remove labels without an explicit request, preview, and
+  confirmation of the exact messages, label, and operation.
 - Never state that a message was sent; say only that a draft was saved.
 - Keep a human manager as final reviewer and sender.
 - Stop and ask when identity, recipient, selector, or clinic facts are unclear.
