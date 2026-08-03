@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "yandex-mail-clinic": {
-      "url": "https://mail-mcp.example.com/mcp",
-      "bearer_token_env_var": "YANDEX_MAIL_MCP_TOKEN"
+      "url": "https://mailagent.smileeyes.ru/mcp",
+      "auth": "oauth"
     }
   }
 }
